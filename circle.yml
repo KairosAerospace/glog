@@ -16,4 +16,4 @@ dependencies:
     - "true"
 test:
   override:
-    - cd $GITHUB_KAIROS/leakyg && go test -timeout 30s
+    - cd $GITHUB_KAIROS/glog && go test -timeout 30s
