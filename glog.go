@@ -548,13 +548,22 @@ func (l *loggingT) header(s severity, depth int) (*buffer, string, int) {
 	return l.formatHeader(s, file, line), file, line
 }
 
-// formatHeader formats a log header using the provided file name and line number.
-func (l *loggingT) formatHeader(s severity, file string, line int) *buffer {
+func (l *loggingT) colorHeader(s severity, buf *buffer) *buffer {
 	// info = green
 	// warn = yellow
 	// error / fatal = red
 	ANSIcolors := []string{"\033[32m", "\033[33m", "\033[31m", "\033[31m"}
+	// 'clear formatting' ANSI escape sequence
 	ANSIclear := "\033[0m"
+	colorBuf := &buffer{}
+	colorBuf.WriteString(ANSIcolors[s])
+	colorBuf.Write(buf.Bytes())
+	colorBuf.WriteString(ANSIclear)
+	return colorBuf
+}
+
+// formatHeader formats a log header using the provided file name and line number.
+func (l *loggingT) formatHeader(s severity, file string, line int) *buffer {
 	now := timeNow()
 	if line < 0 {
 		line = 0 // not a real line number, but acceptable to someDigits
@@ -564,9 +573,6 @@ func (l *loggingT) formatHeader(s severity, file string, line int) *buffer {
 	}
 	buf := l.getBuffer()
 
-	if l.color {
-		buf.WriteString(ANSIcolors[s])
-	}
 	// Avoid Fprintf, for speed. The format is so simple that we can do it quickly by hand.
 	// It's worth about 3X. Fprintf is hard.
 	_, month, day := now.Date()
@@ -595,9 +601,6 @@ func (l *loggingT) formatHeader(s severity, file string, line int) *buffer {
 	buf.tmp[n+1] = ']'
 	buf.tmp[n+2] = ' '
 	buf.Write(buf.tmp[:n+3])
-	if l.color {
-		buf.WriteString(ANSIclear) // 'clear formatting' ANSI escape sequence
-	}
 	return buf
 }
 
@@ -643,9 +646,10 @@ func (buf *buffer) someDigits(i, d int) int {
 }
 
 func (l *loggingT) println(s severity, args ...interface{}) {
-	buf, file, line := l.header(s, 0)
+	header, file, line := l.header(s, 0)
+	buf := &buffer{}
 	fmt.Fprintln(buf, args...)
-	l.output(s, buf, file, line, false)
+	l.output(s, header, buf, file, line, false)
 }
 
 func (l *loggingT) print(s severity, args ...interface{}) {
@@ -653,56 +657,71 @@ func (l *loggingT) print(s severity, args ...interface{}) {
 }
 
 func (l *loggingT) printDepth(s severity, depth int, args ...interface{}) {
-	buf, file, line := l.header(s, depth)
+	header, file, line := l.header(s, depth)
+	buf := &buffer{}
 	fmt.Fprint(buf, args...)
 	if buf.Bytes()[buf.Len()-1] != '\n' {
 		buf.WriteByte('\n')
 	}
-	l.output(s, buf, file, line, false)
+	l.output(s, header, buf, file, line, false)
 }
 
 func (l *loggingT) printf(s severity, format string, args ...interface{}) {
-	buf, file, line := l.header(s, 0)
+	header, file, line := l.header(s, 0)
+	buf := &buffer{}
 	fmt.Fprintf(buf, format, args...)
 	if buf.Bytes()[buf.Len()-1] != '\n' {
 		buf.WriteByte('\n')
 	}
-	l.output(s, buf, file, line, false)
+	l.output(s, header, buf, file, line, false)
 }
 
 // printWithFileLine behaves like print but uses the provided file and line number.  If
 // alsoLogToStderr is true, the log message always appears on standard error; it
 // will also appear in the log file unless --logtostderr is set.
 func (l *loggingT) printWithFileLine(s severity, file string, line int, alsoToStderr bool, args ...interface{}) {
-	buf := l.formatHeader(s, file, line)
+	header := l.formatHeader(s, file, line)
+	buf := &buffer{}
 	fmt.Fprint(buf, args...)
 	if buf.Bytes()[buf.Len()-1] != '\n' {
 		buf.WriteByte('\n')
 	}
-	l.output(s, buf, file, line, alsoToStderr)
+	l.output(s, header, buf, file, line, alsoToStderr)
+}
+
+func (l *loggingT) constructLine(s severity, header buffer, msg *buffer, file string, line int, color bool) *buffer {
+	if color {
+		header = *l.colorHeader(s, &header)
+		header.Write(msg.Bytes())
+	} else {
+		header.Write(msg.Bytes())
+	}
+	if l.traceLocation.isSet() {
+		if l.traceLocation.match(file, line) {
+			header.Write(stacks(false))
+		}
+	}
+	return &header
 }
 
 // output writes the data to the log files and releases the buffer.
-func (l *loggingT) output(s severity, buf *buffer, file string, line int, alsoToStderr bool) {
+func (l *loggingT) output(s severity, header *buffer, msg *buffer, file string, line int, alsoToStderr bool) {
 	l.mu.Lock()
-	if l.traceLocation.isSet() {
-		if l.traceLocation.match(file, line) {
-			buf.Write(stacks(false))
-		}
-	}
+	buf := l.constructLine(s, *header, msg, file, line, false)
 	data := buf.Bytes()
+	colorData := l.constructLine(s, *header, msg, file, line, l.color).Bytes()
 	if !flag.Parsed() {
 		os.Stderr.Write([]byte("ERROR: logging before flag.Parse: "))
 		os.Stderr.Write(data)
 	} else if l.toStderr {
-		os.Stderr.Write(data)
+		os.Stderr.Write(colorData)
 	} else {
 		if alsoToStderr || l.alsoToStderr || s >= l.stderrThreshold.get() {
-			os.Stderr.Write(data)
+			os.Stderr.Write(colorData)
 		}
 		if l.file[s] == nil {
 			if err := l.createFiles(s); err != nil {
-				os.Stderr.Write(data) // Make sure the message appears somewhere.
+				os.Stderr.Write(colorData) // Make sure the message appears somewhere.
 				l.exit(err)
 			}
 		}
