@@ -660,9 +660,6 @@ func (l *loggingT) printDepth(s severity, depth int, args ...interface{}) {
 	header, file, line := l.header(s, depth)
 	buf := &buffer{}
 	fmt.Fprint(buf, args...)
-	if buf.Bytes()[buf.Len()-1] != '\n' {
-		buf.WriteByte('\n')
-	}
 	l.output(s, header, buf, file, line, false)
 }
 
@@ -670,9 +667,6 @@ func (l *loggingT) printf(s severity, format string, args ...interface{}) {
 	header, file, line := l.header(s, 0)
 	buf := &buffer{}
 	fmt.Fprintf(buf, format, args...)
-	if buf.Bytes()[buf.Len()-1] != '\n' {
-		buf.WriteByte('\n')
-	}
 	l.output(s, header, buf, file, line, false)
 }
 
@@ -683,9 +677,6 @@ func (l *loggingT) printWithFileLine(s severity, file string, line int, alsoToSt
 	header := l.formatHeader(s, file, line)
 	buf := &buffer{}
 	fmt.Fprint(buf, args...)
-	if buf.Bytes()[buf.Len()-1] != '\n' {
-		buf.WriteByte('\n')
-	}
 	l.output(s, header, buf, file, line, alsoToStderr)
 }
 
@@ -695,6 +686,9 @@ func (l *loggingT) constructLine(s severity, header buffer, msg *buffer, file st
 		header.Write(msg.Bytes())
 	} else {
 		header.Write(msg.Bytes())
+	}
+	if header.Bytes()[header.Len()-1] != '\n' {
+		header.WriteByte('\n')
 	}
 	if l.traceLocation.isSet() {
 		if l.traceLocation.match(file, line) {
